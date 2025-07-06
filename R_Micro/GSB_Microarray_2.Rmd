@@ -1,0 +1,339 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-09-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+library(GEOquery)
+library(oligo)
+library(affy)
+library(limma)
+library(dplyr)
+```
+
+```{r}
+
+
+gse1 <- getGEO('GSE21962', GSEMatrix=TRUE)
+
+# Check the original data matrix (before transformation)
+#raw_data <- exprs(gse1[[1]])
+#head(raw_data)
+#summary(raw_data)
+
+
+
+```
+
+```{r}
+eset <- gse1[[1]]
+
+varLabels(eset)
+eset$title # To see the names of the experiments
+eset$organism_ch1 # Show the organism of the experiments
+
+# Count occurrences of each unique title
+title_counts <- table(eset$title)
+
+# Convert the table to a data frame
+title_counts_df <- as.data.frame(title_counts)
+
+# Rename the columns for clarity
+colnames(title_counts_df) <- c("Title", "Count")
+
+# Print the counts
+print(title_counts_df)
+
+
+```
+
+```{r}
+# Select the samples we need
+sel <- 1:92
+eset <- eset[ ,sel]
+# We also need to modify its expression matrix
+exprs(eset) <- exprs(eset)[ ,sel]
+# Create labels for later steps
+
+labels <- ifelse(grepl("Normal", eset$title, ignore.case = TRUE), "Normal", "Cancerous")
+
+#labels <- c(
+
+#  rep("Nonpolypoid lesion", 25),  # First 21 Nonpolypoid lesion samples
+#  rep("Normal mucosa", 25),       # Corresponding 21 Normal mucosa samples
+#  rep("Polypoid lesion", 17),     # 15 Polypoid lesion samples
+#  rep("Normal mucosa", 17),       # Corresponding 15 Normal mucosa samples
+#  rep("Colorectal cancer", 4),    # 4 Colorectal cancer samples
+#  rep("Normal mucosa", 4)#,        # Corresponding 4 Normal mucosa samples
+#  "Nonpolypoid lesion",           # NP5_nonpolypoid sample
+#  "Normal mucosa",                # NM5_normal mucosa sample
+#  "Polypoid lesion",              # P6_polypoid sample
+#  "Normal mucosa"                 # NM6_normal mucosa sample
+#)
+
+# Convert labels to a factor
+sel_groups <- factor(labels)
+
+# Lots of colors you can choose: http://www.stat.columbia.edu/~tzheng/files/Rcolor.pdf
+# But let's try the most simple ones
+# palette function is used to set the customized colors
+#palette(c("red", "skyblue", "seagreen", "pink"))
+palette(c("red", "skyblue"))
+
+# Check sample titles
+print(head(eset$title))
+
+# Check label assignment
+sample_labels <- data.frame(Sample = colnames(exprs(eset)), Title = eset$title, Label = labels)
+print(head(sample_labels))
+
+# Check the levels of sel_groups
+print(table(sel_groups))
+
+# Validate the mapping of labels to samples
+print(head(data.frame(Sample = colnames(exprs(eset)), Label = sel_groups)))
+
+
+
+
+```
+```{r}
+#preprocessing
+
+boxplot(exprs(eset), main = "Boxplot of Expression Values", 
+        xlab = "Samples", ylab = "Expression levels",col=sel_groups, las=2, cex.axis = 0.4, boxwex=0.6, outline=FALSE)
+
+# Plot the density of expression values
+plotDensity(exprs(eset), col = as.numeric(sel_groups), 
+            main = "Density Plot of Expression Values", lty = 1)
+
+# Add legend manually
+legend("topright", legend = levels(sel_groups), col = 1:length(levels(sel_groups)), lty = 1)
+
+
+# Impute missing values with the mean of the row
+exprs_matrix <- exprs(eset)  # Extract the expression matrix
+row_means <- rowMeans(exprs_matrix, na.rm = TRUE)  # Compute row means, ignoring NA
+# Function to replace NA values in a row with the row mean
+replace_na_with_mean <- function(row) {
+  na_indices <- is.na(row)
+  if (any(na_indices)) {
+    row[na_indices] <- mean(row, na.rm = TRUE)
+  }
+  return(row)
+}
+
+# Apply the function to each row of the matrix
+exprs_matrix <- t(apply(exprs_matrix, 1, replace_na_with_mean))
+exprs(eset) <- exprs_matrix
+
+#exprs(eset)[is.na(exprs(eset))] <- rowMeans(exprs(eset), na.rm = TRUE)
+
+# Get the expression matrix
+#exprs_matrix <- exprs(eset)
+
+# Calculate row means ignoring NA values
+#row_means <- rowMeans(exprs_matrix, na.rm = TRUE)
+
+# Replace NA values with the corresponding row mean
+#exprs_matrix[is.na(exprs_matrix)] <- unlist(apply(exprs_matrix, 1, function(row) row_means[which(row == row)]))
+
+# Assign the modified matrix back to eset
+#exprs(eset) <- exprs_matrix
+
+# Perform PCA after imputing missing values
+pca <- prcomp(t(exprs(eset)), scale. = TRUE)
+
+
+# Plot the PCA results (first two principal components)
+plot(pca$x[,1], pca$x[,2], col = sel_groups, pch = 16,
+     xlab = "PC1", ylab = "PC2", main = "PCA Plot")
+legend("topright", legend = levels(sel_groups), col = 1:length(levels(sel_groups)), pch = 16)
+
+# Get the expression matrix from eset
+exprs_matrix1 <- exprs(eset)
+
+# Subset based on group membership (assuming 'sel_groups' has 'Cancerous' and 'Normal' labels)
+cancerous_samples <- exprs_matrix1[, sel_groups == "Cancerous"]
+normal_samples <- exprs_matrix1[, sel_groups == "Normal"]
+
+# Calculate the average expression for each group
+cancerous_mean <- rowMeans(cancerous_samples)
+normal_mean <- rowMeans(normal_samples)
+
+# Calculate M-values (log-ratio) and A-values (mean expression)
+M <- cancerous_mean - normal_mean  # log-ratio between cancerous and normal
+A <- 0.5 * (cancerous_mean + normal_mean)  # average expression between cancerous and normal
+
+# Plot the custom MA plot with color coding based on 'sel_groups'
+plot(M, A, col = as.numeric(sel_groups), pch = 16, 
+     ylab = "A (Average expression)", 
+     xlab = "M (Log ratio)", 
+     main = "Custom MA Plot")
+
+# Add legend for the custom MA plot
+legend("topright", legend = levels(sel_groups), col = 1:length(levels(sel_groups)), pch = 16)
+
+
+# Compute correlation matrix of samples
+cor_matrix <- cor(exprs(eset))
+
+# Plot heatmap of correlation matrix
+heatmap(cor_matrix, main = "Heatmap of Sample-to-Sample Correlation")
+```
+
+```{r}
+
+# Perform quantile normalization
+exprs(eset) <- normalizeBetweenArrays(exprs(eset), method = "quantile")
+
+# Boxplot after normalization
+boxplot(exprs(eset), main = "Boxplot of Expression Values", 
+        xlab = "Samples", ylab = "Expression levels",col=sel_groups, las=2, cex.axis = 0.4, boxwex=0.6, outline=FALSE)
+
+```
+
+
+```{r}
+raw_data2 <- exprs(eset)
+head(raw_data2)
+summary(raw_data2)
+```
+
+
+```{r}
+#differential 
+
+ex <- exprs(eset)
+exprs(eset) <- log2(ex)
+
+# set up the data and proceed with analysis
+eset$description <- sel_groups # Replace the long description by short labels
+# Construct design matrices by model.matrix
+# model.matrix loads the columns of eset and matches to its description. 
+design <- model.matrix(~ description + 0, eset) # 0 defines the way we compare the samples
+colnames(design) <- levels(sel_groups)
+
+```
+
+```{r}
+# Fit linear model for each gene given a series of arrays
+fit <- lmFit(eset, design)
+# Build comparison and compute the satistics
+#cont.matrix <- makeContrasts(Cancerous-Normal, levels=design)
+# Define the contrast matrix
+cont.matrix <- makeContrasts(
+  Cancerous_vs_Normal = Cancerous - Normal,  # Specify the contrast to compare Cancerous vs Normal
+  levels = design
+)
+# Apply the contrast matrix to the linear model
+fit2 <- contrasts.fit(fit, cont.matrix)
+# Generate the statistics
+fit2 <- eBayes(fit2, 0.05)
+```
+
+
+```{r}
+# Extract significant DE genes for Cancerous vs Normal
+de_genes_Cancerous_vs_Normal <- topTable(fit2, coef=1, adjust="fdr", p.value=0.05, number=Inf)
+
+# Get all DE genes regardless of the comparisons
+all_de_genes <- topTable(fit2, adjust="fdr", p.value=0.05, number=Inf)
+
+```
+
+```{r}
+# Load the required library
+library(openxlsx)
+
+# Create a new workbook
+wb <- createWorkbook()
+
+# Create each sheet in the workbook
+addWorksheet(wb, "de_genes_Cancerous_vs_Normal")
+addWorksheet(wb, "all_de_genes")
+
+# Write the data into each sheet
+writeData(wb, "de_genes_Cancerous_vs_Normal", de_genes_Cancerous_vs_Normal, rowNames = TRUE)
+writeData(wb, "all_de_genes", all_de_genes, rowNames = TRUE)
+
+# Save the workbook to a file
+saveWorkbook(wb, "DE_genes_GSE21962.xlsx", overwrite = TRUE)
+
+```
+
+
+```{r}
+
+```
+
+```{r}
+# Load the necessary library
+library(mogene10sttranscriptcluster.db)
+
+# Get the column names available in the annotation package
+keytypes(mogene10sttranscriptcluster.db)
+
+# Get all the probe IDs from your ExpressionSet
+ID <- featureNames(eset)
+tmp <- select(mogene10sttranscriptcluster.db, ID, columns = c("SYMBOL", "GENENAME", "PROBEID"), keytype = "PMID")
+
+# Ensure that the tmp dataframe has no NA values
+tmp <- na.omit(tmp)
+
+# Group by PROBEID and aggregate SYMBOL and GENENAME
+aggregated_tmp <- tmp %>%
+  group_by(PROBEID) %>%
+  summarise(SYMBOL = paste(unique(SYMBOL), collapse = "; "), 
+            GENENAME = paste(unique(GENENAME), collapse = "; "), 
+            .groups = 'drop')
+
+# Add the ENTREZID and SYMBOL columns to your differential expression results
+all_de_genes$ENTREZID <- tmp$ENTREZID[match(all_de_genes$ID, tmp$PROBEID)]
+all_de_genes$SYMBOL <- tmp$SYMBOL[match(all_de_genes$ID, tmp$PROBEID)]
+
+de_genes_Cancerous_vs_Normal$ENTREZID <- tmp$ENTREZID[match(de_genes_Cancerous_vs_Normal$ID, tmp$PROBEID)]
+de_genes_Cancerous_vs_Normal$SYMBOL <- tmp$SYMBOL[match(de_genes_Cancerous_vs_Normal$ID, tmp$PROBEID)]
+
+```
+```{r}
+# By Limma build-in function
+ma <- fit2[,"Cancerous_vs_Normal"]
+plotMA(ma)
+
+volcanoplot(fit2, coeff=1, xlim=c(-2,2), col=sel_groups)
+title("Cancerous_vs_Normal")
+
+# Performs a principal components analysis on the given data matrix
+pca <- prcomp(t(ex))
+# Take PC1 and PC2 for the plot
+plot(pca$x[,1:2],col=sel_groups, pch=19)
+# include a legend for points 
+legend("topright", inset=.05, labels, pch=19, col=1:3, horiz=TRUE)
+
+
+
+```
+
+
+```{r}
+
+#eset_samples <- colnames(exprs(eset))  # Get sample names from eset
+
+# If you have sample names in eset
+#missing_samples <- eset_samples[!(eset_samples %in% names(sel_groups))]
+
+#if(length(missing_samples) > 0) {
+ #   print("The following samples are missing from sel_groups:")
+  #  print(missing_samples)
+#} else {
+#    print("No samples are missing from sel_groups.")
+#}
+```
+
